@@ -1,0 +1,137 @@
+#!/bin/bash
+
+#Author: Alejandro Endo
+#Date: 10/01/10
+#Description: Runs a snapshot backup
+#Parameters: group, include file,name of other grups in the same client
+
+#####User variables#####
+client_config=/etc/backup/client/pushy.conf
+
+if [ ! -f "$client_config" ]; then
+    echo "Config file not found: $client_config"
+    exit 1
+else
+    source "$client_config"
+fi
+
+#####Internal variables#####
+SCRIPT_NAME="pushy-backup"
+OPTIONS_LONG="dry-run other-groups: verbose"
+OPTIONS_SHORT="n G: V"
+
+PARSED_OPTIONS=$(getopt -n "$SCRIPT_NAME" --option "$OPTIONS_SHORT" --long "$OPTIONS_LONG" -- "$@")
+OPTIONS_RET=$?
+eval set -- "$PARSED_OPTIONS" #needed for arguments parsing
+
+usage() {
+    echo "Usage: $SCRIPT_NAME [ --dry-run|-n --other-groups|-G (LIST) --verbose|-V ] GROUP INCLUDE-LIST-FILE [ EXCLUDE-LIST-FILE ]"
+}
+
+if [ $OPTIONS_RET -ne 0 ]; then
+    usage;
+    exit 1;
+fi
+
+ssh=0
+verbose=0;
+while true ; do
+    case "$1" in
+        --dry-run | -n ) DRY="--dry-run"; shift;;
+	--other-groups | -G ) groups=$2; shift 2;;
+	--verbose | -V ) verbose=1; shift;;
+	--) shift ; break ;;
+	*) echo "Internal error!" ; exit 1 ;;
+    esac
+
+done
+
+if [[ $# != 2 && $# != 3 ]]; then
+    #Mandatory positional params missing or too many
+    echo "Invalid parameters"
+    usage;
+    exit 1
+fi
+
+if [[ $root -eq 1 && $(/usr/bin/id -u) != "0" ]]; then
+    echo "Script must be run as root"
+    exit 1
+fi
+
+if [ ! -f "$2" ]; then
+    echo "Include file $2 not found"
+    exit 1
+else
+    if [ $verbose == 1 ]; then
+        echo "Including files from $2"
+    fi
+fi
+
+if [ -n "$3" ]; then
+    exclude_file=$3;
+fi
+
+if [[ -n "$exclude_file" && ! -f "$exclude_file" ]]; then
+    echo "Exclude file $exclude_file not found"
+else
+    exclude_flag="--exclude-from=$exclude_file"
+    if [ $verbose -eq 1 ]; then
+        echo "Excluding files from $exclude_file"
+    fi
+fi
+
+if [[ $use_ssh == 1 && ! -f $ssh_keyfile ]]; then
+    echo "SSH keyfile not found: $ssh_keyfile"
+    exit 1
+fi
+
+if [ ! -f $rsyncd_password_file ]; then
+    echo "Rsyncd password file not found: $rsyncd_password_file"
+    exit 1
+fi
+
+if [ -n "$error_log_path" ]; then
+    error_file="$error_log_path/$SCRIPT_NAME.err"
+    error_log="2>> $error_file"
+    echo -e "\n\n=====================" >> $error_file
+    echo $(date) >> $error_file
+    echo -e "=====================\n" >> $error_file
+fi
+
+####Construct arguments####
+
+group=$1
+if [ $verbose == 1 ]; then
+   echo "Group = $group"
+   verbose_flags="-v --progress"  #set verbose flags
+fi
+
+link_dest="--link-dest=../$group.latest"
+for other_group in $groups
+do
+    link_dest="$link_dest --link-dest=../$other_group.latest"
+done
+
+if [ $verbose == 1 ]; then
+    echo "link_dest's = $link_dest"
+fi
+
+if [ $use_ssh == 1 ]; then
+    if [ $verbose == 1 ]; then
+        echo -e "\nUsing ssh\n"
+    fi
+    ssh_flags="-e \"ssh -o \\\"BatchMode yes\\\" -l $ssh_login -i $ssh_keyfile\""
+else
+    if [ $verbose == 1 ]; then
+        echo -e "\nUsing no encryption\n"
+    fi
+    explicit_port="--port $backup_port"
+fi
+
+command="rsync --archive $verbose_flags $DRY $ssh_flags $link_dest --password-file=$rsyncd_password_file $explicit_port --files-from=$2 $exclude_flag --recursive --relative --human-readable $rsync_extra / $rsyncd_login@$backup_server::$rsyncd_login/$client_name/$group-tmp $error_log"
+
+if [ $verbose == 1 ]; then
+    echo "Command: $command"
+fi
+
+eval $command

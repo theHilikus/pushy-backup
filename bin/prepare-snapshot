@@ -1,0 +1,96 @@
+#!/bin/bash
+
+#Author: Alejandro Endo
+#Date: 10/01/10
+#Description: Prepares the dir structures for a snapshot backup
+#Parameters: None
+
+####User defined variables####
+config_file="/etc/backup/snapshots.conf"
+
+####internal variables####
+SCRIPT_NAME="prepare-snapshot"
+
+#### load settings ####
+if [ ! -f $config_file ]; then
+    echo "Config file not found: $config_file"
+    exit 1
+fi
+
+source $config_file
+source /usr/local/lib/snapshot-lib
+
+
+####Actual entry point####
+
+if [ ! -d "$mount_point" ]; then
+    log "Mount point $mount_point doesn't exist"
+    exit 1
+fi
+
+if [ $RO_check == 1 ]; then 
+   isMountRO
+   isRO=$?
+   if [ "$isRO" -eq 0 ]; then
+      log "Mount was not read-only which makes the backups stored less secure"
+      log "This could be due to a backup that did not terminate cleanly"
+   else
+       #mount is read-only (best option). remount rw
+       result=$(sudo mount -o remount,rw $mount_point 2>&1)
+       if [ $? != 0 ]; then
+	   log "Could not remount $mount_point as read-write:\n   $result"
+	   exit 1;
+       fi
+	   
+   fi 
+fi
+
+if [[ "$RSYNC_REQUEST" != */*-tmp ]]; then
+    log "Sync path is incorrect. It should be of the form GROUP-tmp.\nTerminating..."
+    exit 1
+fi
+
+#get client and group being backed up
+noUser=${RSYNC_REQUEST#*/} #remove user
+client=${noUser%%/*}
+group=${noUser##*/} #remove client
+group=${group%%-tmp}
+
+if [[ -z "$client" || -z "group" ]]; then
+   log "Client or group parsing failed. We can't continue without them"
+   log "RSYNC_ARG4=$RSYNC_ARG4"
+   exit 1
+fi
+
+if [ ! -d "$RSYNC_MODULE_PATH/$client" ]; then
+   log "Unknown client. Add the client folders before running a backup"
+   exit 1
+fi
+
+if [ ! -f "$RSYNC_MODULE_PATH/$client/$group.conf" ]; then
+    log "Configuration file not found: $RSYNC_MODULE_PATH/$client/$group.conf"
+fi
+
+if [ ! -h "$RSYNC_MODULE_PATH/$client/$group.latest" ]; then
+   log "Latest snapshot is unknown (Ignore if this the first snapshot in the group): $RSYNC_MODULE_PATH/$client/$group.latest"
+fi
+
+if [[ "$RSYNC_ARG2" == *n* ]]; then
+    #dry-run mode. Don't rotate folders and stop here without error
+    exit 0
+fi
+
+
+
+#### NO DRY-RUN ####
+
+#save info for post xfer script
+echo "$client|$group" > /tmp/snapshot-backup.$RSYNC_PID
+
+if [ -d $RSYNC_REQUEST ]; then
+   #stale tmp. remove it
+   log "Removing stale session"
+   rm $RSYNC_REQUEST
+fi
+
+log "Finished successfully"

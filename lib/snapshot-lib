@@ -1,0 +1,99 @@
+#Author: Alejandro Endo
+#Date: 24/01/10
+#Description: Helper functions used by pushy-backup
+
+xattr_NS="user.pushy"
+
+#Gets the index of the first folder in the level specified in $1.
+#Parameters: Desired level, sorted list of directories in inverted chronological order
+get_oldest_in_list() {
+   if [ $# != 1 ]; then
+      log "Invalid call to get_oldest_in_list"
+      return 1
+   fi
+
+   echo $(ls -dtr $1 | head -n 1)
+}
+
+
+log() {
+    if [ "$logging" -eq 1 ]; then
+        echo -e "$(date) [$SCRIPT_NAME]:" $* >> $log_file
+    fi
+}
+
+# Returns a list of directories that match the specified value in the specified attribute
+ls_xattr() {
+   attrName=$2
+   attrValue=$4
+   shift 4;
+   count=0
+   for file in $*
+   do
+      file=${file%/} #remove trailing slash since it screws detection of symlinks
+      if [[ -d "$file"  && ! -L "$file" && $(getfattr -n $attrName --only-values "$file" 2> /dev/null) == "$attrValue" ]]; then
+         echo "$file"
+	 let count++
+      fi
+   done
+   return $count
+}
+
+del_snapshot() {
+
+   if [ $# != 1 ]; then
+      log "Invalid call to del_snapshot"
+      return 1
+   fi
+
+   if [ $use_delete_pool == 1 ]; then
+      trash="$1/../../Trash"
+      mkdir $trash 2> /dev/null  #in case it is not created
+      log "Moving $1 to $trash"
+      ret=$(mv $1 "$trash")
+      if [ $? != 0 ]; then
+            log "Error moving oldest snapshot ($1) to delete pool ($trash): $ret"
+      	    return 1
+      fi
+   else
+      log "Removing $1"
+      ret=$(rm $oldest)
+      if [ $? != 0 ]; then
+            log "Error deleting oldest snapshot ($1): $ret"
+	    return 1
+      fi
+   fi
+   return 0
+}
+
+remove_oldest_snapshot() {
+   if [ $# != 1 ]; then
+      log "Invalid call to remove_oldest_snapshot"
+      return 1
+   fi
+
+   oldest=$(get_oldest_in_list "$1")
+   if [[ -n "$oldest" && -d "$oldest" ]]; then
+      del_snapshot "$oldest"
+      return $?      
+   fi
+
+   return 1
+}
+
+isMountRO() {
+   mount_opt=$(cat /etc/mtab | grep /mnt/Back | cut -d " " -f 4)
+   if [ -z "$mount_opt" ]; then
+       log "Mount point is not currently mounted. It should be mounted before running this script (preferably as read-only)"
+       exit 1
+   fi
+
+   mount_opt=",$mount_opt,"
+   if [[ $mount_opt == *",rw,"* ]]; then
+       return 0
+   else 
+       if [[ $mount_opt == *",ro,"* ]]; then
+	   return 1
+       fi
+   fi
+}

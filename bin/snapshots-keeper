@@ -1,0 +1,111 @@
+#!/bin/bash
+
+#Author: Alejandro Endo
+#Date: 20/01/10
+#Description: Maintains snapshots: promotes, deletes, moves previous snapshots for all clients
+
+
+####User defined variables####
+config_file="/etc/backup/snapshots.conf"
+
+##############################
+
+SCRIPT_NAME="snapshots-keeper"
+
+source $config_file
+source /usr/local/lib/snapshot-lib
+
+log "Started"
+
+if [ $RO_check == 1 ]; then 
+   isMountRO
+   isRO=$?
+   if [ "$isRO" -eq 0 ]; then
+      log "Mount was not read-only which makes the backups stored less secure"
+      log "This could be due to a backup that did not terminate cleanly"
+   else
+       #mount is read-only (best option). remount rw
+       result=$(sudo mount -o remount,rw $mount_point 2>&1)
+       if [ $? != 0 ]; then
+	   log "Could not remount $mount_point as read-write:\n   $result"
+	   exit 1;
+       fi
+	   
+   fi 
+fi
+
+IFS=$'\n'
+#promote snapshots if necessary
+for config in $snapshots_root/*/*/*.conf
+do
+   source $config
+   count=1  #start at level1 because level0 doesn't need recycling of old snapshots. it is done in post xfer
+   while [ "$count" -lt $levels ]
+   do
+       snap_path=${config%%.conf}  #path to snapshots and group (/mnt/.../quick)
+       current_level=$(ls_xattr -n $xattr_NS.level -v $count "$snap_path.*/")
+       current_level_count=$?
+	previous_level=$(ls_xattr -n $xattr_NS.level -v $(($count-1)) "$snap_path.*/")
+	oldest_previous=$(get_oldest_in_list "$previous_level")
+       #oldest_previous=$(ls -dtr $previous_level | head -n 1) #check only oldest since we only promote 1 in every level
+       if [ -z "$previous_level" ]; then
+	   #nothing to promote (normal if no backups yet)
+	   if [[ $(ls -d "$snap_path".*/ 2> /dev/null | wc -l) -gt 0 && $count -gt 1 ]]; then
+	       #Abnormal situation. There are snapshots but nothing found in previous level
+	       log "Invalid snapshots state. No snapshots found in level $(($count-1)) but there are snapshots in the directory. ($snap_path)"
+	   fi
+	   let count++
+	   continue
+       fi
+       if [[ "$current_level_count"  -eq 0 ]]; then 
+         #current level is empty, just promote oldest from previous level
+           log "Promoting $oldest_previous from level $(($count-1)) to $count because the level was empty"
+	   ret=$(setfattr -n $xattr_NS.level -v $count $oldest_previous)
+           if [ $? != 0 ]; then
+               log "Error setting extended attribute on snapshot: $ret"
+           fi
+       else
+	  #current level is not empty
+          #check if difference between oldest in previous and newest in current is greater than the frequency
+	   newest=$(ls -dt $current_level | head -n 1)
+           timestamp_newest=$(stat -c %Y "$newest")
+           eval "promote_freq=\$level$(($count-1))_promote_freq" #in days
+           promote_freq_secs=$(($promote_freq * 24 * 60 * 60))
+	   eval "current_level_max=\$level"$count"_count"
+	   timestamp_oldest_previous=$(stat -c %Y "$oldest_previous")
+#	   if [ $(($timestamp_newest + $promote_freq_secs)) -lt "$timestamp_oldest_previous" ]; then
+	   if [ $(($timestamp_oldest_previous - $timestamp_newest)) -gt $promote_freq_secs ]; then
+	      #time to promote oldest in previous level
+	       log "Promoting $oldest_previous from level $(($count-1)) to $count because promotion frequency was surpassed"
+               ret=$(setfattr -n $xattr_NS.level -v $count $oldest_previous)
+	       if [ $? != 0 ]; then
+		   log "Error setting extended attribute on snapshot: $ret"
+	       fi
+	       let current_level_count++ #since we just promoted a snapshot
+	   fi
+	   #check for extra snapshots
+	   while [ $current_level_count -gt $current_level_max ]; do
+		   #too many
+		   log "Found extra snapshots ($current_level_count when there should be $current_level_max)"
+		   remove_oldest_snapshot "$current_level"
+                   if [ $? -ne 0 ]; then
+                       #possible infinite loop since # of snapshots did probably not decrease
+                       break
+                   fi
+                   current_level=$(ls_xattr -n $xattr_NS.level -v $count "$snap_path.*/")
+                   current_level_count=$?
+	   done
+
+       fi
+      let count++
+   done
+done
+
+#clean delete pool
+log "Deleting Trash: $snapshots_root/*/Trash/*"
+ret=$(rm -rf $snapshots_root/*/Trash/*)
+if [ $? -ne 0 ]; then
+   log "Error deleting Trash: $ret"
+fi
+
+log "Finished"

@@ -1,0 +1,112 @@
+#!/bin/bash
+
+#Author: Alejandro Endo
+#Date: 16/01/10
+#Description: Prepares the dir structures for a snapshot backup
+#Parameters: None
+
+####User defined variables####
+config_file="/etc/backup/snapshots.conf"
+
+####internal variables####
+SCRIPT_NAME="post-snapshots"
+
+#### load settings ####
+if [ ! -f "$config_file" ]; then
+    echo "Config file not found: $config_file"
+    exit 1
+fi
+
+source $config_file
+source /usr/local/lib/snapshot-lib
+
+log "Started"
+
+#get data from pre xfer script
+pre_xfer_file="/tmp/snapshot-backup.$RSYNC_PID" 
+if [ ! -f "$pre_xfer_file" ]; then
+    log "Cannot load info from pre xfer script: file not found. This is normal if this was a dry-run\nTerminating...\n"
+    exit 1
+fi
+
+data=$(head -n 1 /tmp/snapshot-backup.$RSYNC_PID)
+client=$(echo $data | cut -d "|" -f 1);
+group=$(echo $data | cut -d "|" -f 2);
+if [[ -z "$client" || -z "$group" ]]; then
+    log "Cannot load info from pre xfer script: invalid file content. Terminating...\n"
+    exit 1
+fi
+
+#remove file even if errors
+rm $pre_xfer_file
+
+case "$RSYNC_EXIT_STATUS" in
+    0 ) success=1;;
+    23 ) success=1; log "rsync warning (Exit code 23): Partial transfer due to error. This is not considered fatal";;
+    24 ) success=1; log "rsync warning (Exit code 24): Partial transfer due to vanished source files. This is not considered fatal";;
+    * ) success=0;;
+esac
+
+IFS=$'\n'
+
+timestamp=$(date +$date_format)
+if [ "$success" == 1 ]; then
+   #sync succeeded
+    log "rsync transfer was successfull. Exit code: $RSYNC_EXIT_STATUS"
+    ret=$(mv $RSYNC_MODULE_PATH/$client/$group-tmp $RSYNC_MODULE_PATH/$client/$group.$timestamp)
+    if [ $? != 0 ]; then
+	log "Error renaming valid tmp snapshot: $ret"
+    fi
+
+   #update xattr
+    ret=$(setfattr -n $xattr_NS.level -v 0 $RSYNC_MODULE_PATH/$client/$group.$timestamp)
+    if [ $? != 0 ]; then
+	log "Error setting extended attribute on snapshot: $ret"
+    fi
+
+   #recreate symlink latest
+    rm $RSYNC_MODULE_PATH/$client/$group.latest
+    ln -s $group.$timestamp $RSYNC_MODULE_PATH/$client/$group.latest
+
+    group_config="$RSYNC_MODULE_PATH/$client/$group.conf"
+    if [ ! -f "$group_config" ]; then
+	log "Configuration file for $group not found: $group_config.\nBackup successfully finished but cleaning of old snapshots was not possible. Terminating..."
+	exit 1
+    fi
+    source "$group_config"  #load settings for this group
+
+
+   #check if old snapshots should be removed
+
+    log "Snapshots to keep in level 0: $level0_count"
+    level0_list=$(ls_xattr -n $xattr_NS.level -v 0 "$RSYNC_MODULE_PATH/$client/$group.*/")
+    level0_currentCount=$?
+    log "Snapshots found in level 0: $level0_currentCount"
+    #check for extra snapshots
+    while [ $level0_currentCount -gt $level0_count ]; do
+	#too many
+	log "Found extra snapshots ($level0_currentCount when there should be $level0_count)"
+	remove_oldest_snapshot "$level0_list"
+        if [ $? -ne 0 ]; then
+           #possible infinite loop since # of snapshots did probably not decrease
+           break
+        fi
+        level0_list=$(ls_xattr -n $xattr_NS.level -v 0 "$RSYNC_MODULE_PATH/$client/$group.*/")
+        level0_currentCount=$?
+    done    
+else
+    log "Unclean rsync exit: $RSYNC_EXIT_STATUS"
+    #mv $RSYNC_MODULE_PATH/$client/$group-tmp $RSYNC_MODULE_PATH/$client/$group-ERROR.$timestamp
+    touch $RSYNC_MODULE_PATH/$client/$group-tmp/error_code_$RSYNC_EXIT_STATUS-$timestamp
+fi
+
+#make partition read-only
+
+if [ $RO_check -eq 1 ];then
+    result=$(sudo mount -o remount,ro $mount_point 2>&1)
+    if [ $? -ne 0 ]; then
+        log "Could not remount $mount_point as read-only:\n   $result"
+    fi
+fi
+
+log "Finished post-processing Snapshot in group \"$group\" from client \"$client ($RSYNC_HOST_ADDR)\""
