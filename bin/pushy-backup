@@ -131,7 +131,19 @@ fi
 command="rsync --archive $verbose_flags $DRY $ssh_flags $link_dest --password-file=$rsyncd_password_file $explicit_port --files-from=$2 $exclude_flag --recursive --relative --human-readable $rsync_extra / $rsyncd_login@$backup_server::$rsyncd_login/$client_name/$group-tmp $error_log"
 
 if [ $verbose == 1 ]; then
-    echo "Command: $command"
+    echo -e "Command: $command\n"
 fi
 
 eval $command
+rsync_exit=$?
+
+if [ $rsync_exit != 0 ]; then
+    if [ $verbose == 1 ]; then
+	echo "Backup error: rsync returned $rsync_exit"
+    fi
+    exit 1
+else
+    if [ $verbose == 1 ]; then
+	echo "Backup ran successfully"
+    fi
+fi
