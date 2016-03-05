@@ -1,0 +1,53 @@
+# Trailing slashes mean directories only. No trailing slashes mean files and directories
+
+###### too big #####
+*.iso
+*.mp3
+*.avi
+*.mp*g
+*.mov
+*.wmv
+
+######tmp files#####
+/home/*/tmp
+*.o
+*~
+#*
+.#*
+,*
+_$*
+*$
+*cache/
+*Cache/
+*/.opera/cache?
+/home/*/.gvfs/
+
+##### don't care #####
+/home/*/downloads
+*Trash
+/var/lib/apt/lists/
+/home/mythtv/mc2xml/*.xml
+/usr/src/linux-*
+/usr/share/doc/
+
+##### From CVS #####
+cvslog.*
+tags
+.make.state
+.nse_depinfo
+*.orig
+*.rej
+.del-*
+*.a
+*.olb
+*.obj
+*.so
+*.exe
+*.Z
+*.elc
+*.ln
+core
+.svn/
+.git/
+.bzr/
+

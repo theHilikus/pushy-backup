@@ -1,0 +1,10 @@
+##### Directories to include (no trailing slashes) #####
+
+# wiki
+/usr/share/dokuwiki
+/var/lib/dokuwiki
+
+/etc
+/home
+/srv/svn
+

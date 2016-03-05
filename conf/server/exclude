@@ -1,0 +1,9 @@
+#Files not accepted by the server
+
+*.iso
+*.mp3
+*.avi
+*.mp?g
+*.mov
+*.wmv
+*.m4p

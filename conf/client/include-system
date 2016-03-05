@@ -1,0 +1,18 @@
+##### Directories to include (no trailing slashes) #####
+
+/root
+/etc
+/home
+/usr
+/var/backups
+/var/lib
+/var/local
+/var/log
+/var/mail
+/var/spool
+/var/www
+/srv
+
+##### Files to include (in directories not included) #####
+/lib/ufw/user*.rules
+
